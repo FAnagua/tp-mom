@@ -60,4 +60,47 @@ class MessageMiddlewareQueueRabbitMQ(MessageMiddlewareQueue):
 class MessageMiddlewareExchangeRabbitMQ(MessageMiddlewareExchange):
     
     def __init__(self, host, exchange_name, routing_keys):
-        pass
+        self.host = host
+        self.exchange_name = exchange_name
+        self.routing_keys = routing_keys
+        self.connection = pika.BlockingConnection(pika.ConnectionParameters(host))
+        self.channel = self.connection.channel()
+        self.channel.exchange_declare(exchange=self.exchange_name, exchange_type='direct', durable=True)
+
+    def start_consuming(self, on_message_callback):
+        try:
+            self.channel.basic_qos(prefetch_count=1)
+            result = self.channel.queue_declare(queue='', exclusive=True)
+            queue_name = result.method.queue
+
+            for routing_key in self.routing_keys:
+                self.channel.queue_bind(exchange=self.exchange_name, queue=queue_name, routing_key=routing_key)
+
+            self.channel.basic_consume(queue=queue_name, on_message_callback=make_callback(on_message_callback))
+            self.channel.start_consuming()
+        except pika.exceptions.AMQPConnectionError:
+            raise MessageMiddlewareDisconnectedError("Connection to RabbitMQ lost.")
+        except Exception as e:
+            raise MessageMiddlewareMessageError(str(e))
+
+    def stop_consuming(self):
+        try:
+            self.channel.stop_consuming()
+        except pika.exceptions.AMQPConnectionError:
+            raise MessageMiddlewareDisconnectedError("Connection to RabbitMQ lost.")
+
+    def send(self, message):
+        try:
+            for routing_key in self.routing_keys:
+                self.channel.basic_publish(exchange=self.exchange_name, routing_key=routing_key, body=message)
+        except pika.exceptions.AMQPConnectionError:
+            raise MessageMiddlewareDisconnectedError("Connection to RabbitMQ lost.")
+        except Exception as e:
+            raise MessageMiddlewareMessageError(str(e))
+
+    def close(self):
+        try:
+            self.channel.close()
+            self.connection.close()
+        except Exception as e:
+            raise MessageMiddlewareCloseError(str(e))
