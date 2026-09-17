@@ -17,13 +17,32 @@ def make_callback(on_message_callback):
         on_message_callback(body, ack, nack)
     return callback
 
+class ConnectionManager:
+
+    def __init__(self, host):
+        self.host = host
+        self.connection = pika.BlockingConnection(pika.ConnectionParameters(self.host))
+        self.channel = self.connection.channel()
+
+    def stop_consuming(self):
+        try:
+            self.channel.stop_consuming()
+        except pika.exceptions.AMQPConnectionError:
+            raise MessageMiddlewareDisconnectedError("Connection to RabbitMQ lost.")
+
+    def close(self):
+        try:
+            self.channel.close()
+            self.connection.close()
+        except Exception as e:
+            raise MessageMiddlewareCloseError(str(e))
+
 class MessageMiddlewareQueueRabbitMQ(MessageMiddlewareQueue):
 
     def __init__(self, host, queue_name):
-        self.host = host
-        self.connection = pika.BlockingConnection(pika.ConnectionParameters(self.host))
+        self.connection_manager = ConnectionManager(host)
+        self.channel = self.connection_manager.channel
         self.queue_name = queue_name
-        self.channel = self.connection.channel()
         self.channel.queue_declare(queue=self.queue_name, durable=True)
 
     def start_consuming(self, on_message_callback):
@@ -37,39 +56,35 @@ class MessageMiddlewareQueueRabbitMQ(MessageMiddlewareQueue):
             raise MessageMiddlewareMessageError(str(e))
 
     def stop_consuming(self):
-        try:
-            self.channel.stop_consuming()
-        except pika.exceptions.AMQPConnectionError:
-            raise MessageMiddlewareDisconnectedError("Connection to RabbitMQ lost.")
+        self.connection_manager.stop_consuming()
 
     def send(self, message):
         try:
-            self.channel.basic_publish(exchange='', routing_key=self.queue_name, body=message)
+            self.channel.basic_publish(
+                exchange='', 
+                routing_key=self.queue_name, 
+                body=message,
+                properties=pika.BasicProperties(
+                    delivery_mode=pika.DeliveryMode.Persistent
+                ))
         except pika.exceptions.AMQPConnectionError:
             raise MessageMiddlewareDisconnectedError("Connection to RabbitMQ lost.")
         except Exception as e:
             raise MessageMiddlewareMessageError(str(e))
 
     def close(self):
-        try:
-            self.channel.close()
-            self.connection.close()
-        except Exception as e:
-            raise MessageMiddlewareCloseError(str(e))
-
+        self.connection_manager.close()
 class MessageMiddlewareExchangeRabbitMQ(MessageMiddlewareExchange):
     
     def __init__(self, host, exchange_name, routing_keys):
-        self.host = host
+        self.connection_manager = ConnectionManager(host)
+        self.channel = self.connection_manager.channel
         self.exchange_name = exchange_name
         self.routing_keys = routing_keys
-        self.connection = pika.BlockingConnection(pika.ConnectionParameters(host))
-        self.channel = self.connection.channel()
         self.channel.exchange_declare(exchange=self.exchange_name, exchange_type='direct', durable=True)
 
     def start_consuming(self, on_message_callback):
         try:
-            self.channel.basic_qos(prefetch_count=1)
             result = self.channel.queue_declare(queue='', exclusive=True)
             queue_name = result.method.queue
 
@@ -84,23 +99,19 @@ class MessageMiddlewareExchangeRabbitMQ(MessageMiddlewareExchange):
             raise MessageMiddlewareMessageError(str(e))
 
     def stop_consuming(self):
-        try:
-            self.channel.stop_consuming()
-        except pika.exceptions.AMQPConnectionError:
-            raise MessageMiddlewareDisconnectedError("Connection to RabbitMQ lost.")
+        self.connection_manager.stop_consuming()
 
     def send(self, message):
         try:
             for routing_key in self.routing_keys:
-                self.channel.basic_publish(exchange=self.exchange_name, routing_key=routing_key, body=message)
+                self.channel.basic_publish(
+                    exchange=self.exchange_name, 
+                    routing_key=routing_key, 
+                    body=message)
         except pika.exceptions.AMQPConnectionError:
             raise MessageMiddlewareDisconnectedError("Connection to RabbitMQ lost.")
         except Exception as e:
             raise MessageMiddlewareMessageError(str(e))
 
     def close(self):
-        try:
-            self.channel.close()
-            self.connection.close()
-        except Exception as e:
-            raise MessageMiddlewareCloseError(str(e))
+        self.connection_manager.close()
