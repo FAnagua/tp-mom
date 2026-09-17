@@ -3,7 +3,11 @@ import random
 import string
 from .middleware import MessageMiddlewareQueue, MessageMiddlewareExchange
 
-from .middleware import MessageMiddlewareMessageError, MessageMiddlewareDisconnectedError, MessageMiddlewareCloseError, MessageMiddlewareDeleteError
+from .middleware import (
+    MessageMiddlewareMessageError, 
+    MessageMiddlewareDisconnectedError, 
+    MessageMiddlewareCloseError
+)
 import pika.exceptions
 
 def make_callback(on_message_callback):
@@ -74,6 +78,7 @@ class MessageMiddlewareQueueRabbitMQ(MessageMiddlewareQueue):
 
     def close(self):
         self.connection_manager.close()
+
 class MessageMiddlewareExchangeRabbitMQ(MessageMiddlewareExchange):
     
     def __init__(self, host, exchange_name, routing_keys):
